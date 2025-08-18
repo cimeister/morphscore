@@ -5,20 +5,109 @@ import argparse
 from typing import Dict, List, Any, Optional, Union
 from pathlib import Path
 import os
-class MorphScore:
+import logging
+logger = logging.getLogger(__name__)
 
-    def __init__(self, config_path: Optional[str] = None, **kwargs):
+_CUSTOM_ENCODE_TEXT_AVAILABLE = False
+_original_encode_text = None
+
+# Try to import original functions using multiple strategies
+try:
+    from tokenizer_analysis.utils import encode_text as _custom_encode_text
+    _CUSTOM_ENCODE_TEXT_AVAILABLE = True
+except ImportError:
+    logger.info("Unable to pull custom encoding functions in morphscore library, will use new definitions")
+
+def encode_text(tokenizer, text, add_special_tokens=False):
+    if _CUSTOM_ENCODE_TEXT_AVAILABLE:
+        try:
+            tokens_raw = _custom_encode_text(
+                tokenizer, text,
+                add_special_tokens=add_special_tokens
+            )
+        except Exception as e:
+            logger.warning(f"Original encode_text failed ({e}), using fallback")
+            tokens_raw = tokenizer(text, add_special_tokens=add_special_tokens)
+    else:
+        tokens_raw = tokenizer(text, add_special_tokens=add_special_tokens)
+    if hasattr(tokens_raw, 'ids'):
+        # Handle tokenizers library Encoding object
+        return tokens_raw.ids
+    elif isinstance(tokens_raw, dict) and "input_ids" in tokens_raw:
+        return tokens_raw["input_ids"]
+    elif isinstance(tokens_raw, list):
+        return tokens_raw
+    else:
+        raise ValueError(f"Unexpected token format: {type(tokens_raw)} - {tokens_raw}")
+
+class MorphScore:
+    FLORES_TO_MS_FILES = {
+        'afr_Latn': 'afrikaans_data.csv',
+        'als_Latn': 'albanian_data.csv',
+        'arb_Arab': 'arabic_data.csv',
+        'azj_Latn': 'azerbaijani_data.csv',
+        'eus_Latn': 'basque_data.csv',
+        'bel_Cyrl': 'belarusian_data.csv',
+        'ben_Beng': 'bengali_data.csv',
+        'bul_Cyrl': 'bulgarian_data.csv',
+        'cat_Latn': 'catalan_data.csv',
+        'ces_Latn': 'czech_data.csv',
+        'dan_Latn': 'danish_data.csv',
+        'nld_Latn': 'dutch_data.csv',
+        'eng_Latn': 'english_data.csv',
+        'ekk_Latn': 'estonian_data.csv',
+        'fin_Latn': 'finnish_data.csv',
+        'fra_Latn': 'french_data.csv',
+        'glg_Latn': 'galician_data.csv',
+        'kat_Geor': 'georgian_data.csv',
+        'deu_Latn': 'german_data.csv',
+        'ell_Grek': 'greek_data.csv',
+        'guj_Gujr': 'gujarati_data.csv',
+        'heb_Hebr': 'hebrew_data.csv',
+        'hin_Deva': 'hindi_data.csv',
+        'hun_Latn': 'hungarian_data.csv',
+        'ind_Latn': 'indonesian_data.csv',
+        'ita_Latn': 'italian_data.csv',
+        'jpn_Jpan': 'japanese_data.csv',
+        'kor_Hang': 'korean_data.csv',
+        'lvs_Latn': 'latvian_data.csv',
+        'mkd_Cyrl': 'macedonian_data.csv',
+        'mal_Mlym': 'malayalam_data.csv',
+        'cmn_Hani': 'mandarin_data.csv',
+        'cmn_Hans': 'mandarin_data.csv',
+        'mar_Deva': 'marathi_data.csv',
+        'nob_Latn': 'norwegian_data.csv',
+        'fas_Arab': 'persian_data.csv',
+        'pol_Latn': 'polish_data.csv',
+        'por_Latn': 'portuguese_data.csv',
+        'ron_Latn': 'romanian_data.csv',
+        'rus_Cyrl': 'russian_data.csv',
+        'slk_Latn': 'slovak_data.csv',
+        'spa_Latn': 'spanish_data.csv',
+        'swe_Latn': 'swedish_data.csv',
+        'fil_Latn': 'tagalog_data.csv',
+        'tam_Taml': 'tamil_data.csv',
+        'tha_Thai': 'thai_data.csv',
+        'tur_Latn': 'turkish_data.csv',
+        'ukr_Cyrl': 'ukrainian_data.csv',
+        'urd_Arab': 'urdu_data.csv',
+        'uzn_Latn': 'uzbek_data.csv',
+        'vie_Latn': 'vietnamese_data.csv',
+        'cym_Latn': 'welsh_data.csv'
+    }
+
+    def __init__(self, config_path: Optional[str] = None, data_dir: Optional[str] = None, **kwargs):
         """
         Initialize MorphScore evaluator.
         
         Args:
             config_path: Path to JSON config file (optional)
+            data_dir: Path to morphological data directory (optional, overrides default)
             **kwargs: Direct configuration arguments that override defaults/config
         """
         # Set defaults
         self.config = {
-            # by default, run on all languages in data_dir
-            'data_dir': 'clean_datasets/',
+            'data_dir': data_dir or "morphscore_data",
 
             # Filtering flags
             'unique_only': True,
@@ -138,12 +227,15 @@ class MorphScore:
         if not language_or_filename.endswith('.csv'):
             language = language_or_filename.lower()
             dataset_path = Path(self.config['data_dir']) / f'{language}_data.csv'
+            if not dataset_path.exists() and language_or_filename in self.FLORES_TO_MS_FILES:
+                dataset_path = Path(self.config['data_dir']) / self.FLORES_TO_MS_FILES[language_or_filename]
         else:
             dataset_path = Path(self.config['data_dir']) / language_or_filename
         
         if not dataset_path.exists():
-            raise FileNotFoundError(f"Dataset not found for language: {language}") 
-        return pd.read_csv(dataset_path)
+            logger.warning(f"Dataset not found for language: {language}")
+            return 
+        return pd.read_csv(dataset_path, encoding='utf-8')
 
     def _filter_dataset(self, dataset: pd.DataFrame) -> pd.DataFrame:
         """Apply filtering based on configuration flags."""
@@ -183,14 +275,16 @@ class MorphScore:
         if not hasattr(tokenizer, 'decode'):
             raise ValueError("Tokenizer must have a 'decode' method")
         
-        if not hasattr(tokenizer, 'special_tokens_map'):
-            raise ValueError("Tokenizer must have a 'special_tokens_map' attribute")
+        if hasattr(tokenizer, 'special_tokens_map'):
+            special_toks = tokenizer.special_tokens_map.values()
+        elif hasattr(tokenizer, 'get_added_tokens_decoder'):
+            special_toks = [tokenizer.id_to_token(x) for x in tokenizer.get_added_tokens_decoder()]
+        else:
+            raise ValueError("Tokenizer must have a 'special_tokens_map' attribute or 'get_added_tokens_decoder' method")
         
         required_cols = ['stem', 'lemma', 'preceding_part', 'following_part', 'wordform']
         if not all(col in dataset.columns for col in required_cols):
             raise ValueError(f"Dataset must contain columns: {required_cols}")
-        
-        special_toks = tokenizer.special_tokens_map.values()
 
         # Score storage
         points_morphscore_recall = []
@@ -240,9 +334,8 @@ class MorphScore:
                 morphemes.append(suffix)
 
             # Tokenize
-            token_output = tokenizer(wordform)
-            token_ids = token_output['input_ids']
-            tokens = [tokenizer.decode(token_id) for token_id in token_ids]
+            token_ids = encode_text(tokenizer, wordform, add_special_tokens=False)
+            tokens = [tokenizer.decode([token_id]) for token_id in token_ids]
             tokens = [t for t in tokens if t not in special_toks]
             if self.config['subword_prefix']:
                 tokens = [t.replace(self.config['subword_prefix'], '') for t in tokens]
@@ -350,8 +443,11 @@ class MorphScore:
 
         for language in languages:
             dataset = self._load_dataset(language)
+            if dataset is None:
+                continue
+                
             filtered_data = self._filter_dataset(dataset)
-
+            logger.debug(f"Language {language}: Original data len {len(dataset)}; Filtered data len {len(filtered_data)}")
             if len(filtered_data) == 0:
                 results_per_lang[language] = {'num_samples': 0, 'error': 'No samples after filtering'}
                 continue
