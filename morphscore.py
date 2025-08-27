@@ -8,28 +8,25 @@ import os
 import logging
 logger = logging.getLogger(__name__)
 
-_CUSTOM_ENCODE_TEXT_AVAILABLE = False
-_original_encode_text = None
-
-# Try to import original functions using multiple strategies
-try:
-    from tokenizer_analysis.utils import encode_text as _custom_encode_text
-    _CUSTOM_ENCODE_TEXT_AVAILABLE = True
-except ImportError:
-    logger.info("Unable to pull custom encoding functions in morphscore library, will use new definitions")
 
 def encode_text(tokenizer, text, add_special_tokens=False):
-    if _CUSTOM_ENCODE_TEXT_AVAILABLE:
-        try:
-            tokens_raw = _custom_encode_text(
-                tokenizer, text,
-                add_special_tokens=add_special_tokens
-            )
-        except Exception as e:
-            logger.warning(f"Original encode_text failed ({e}), using fallback")
-            tokens_raw = tokenizer(text, add_special_tokens=add_special_tokens)
-    else:
+    """
+    Encode text using various tokenizer types.
+    
+    This function handles both HuggingFace transformers and tokenizers library objects.
+    """
+    # Try multiple encoding strategies
+    try:
+        # Strategy 1: Call tokenizer directly (most common)
         tokens_raw = tokenizer(text, add_special_tokens=add_special_tokens)
+    except Exception:
+        try:
+            # Strategy 2: Use encode method
+            tokens_raw = tokenizer.encode(text, add_special_tokens=add_special_tokens)
+        except Exception as e:
+            raise ValueError(f"Could not encode text with tokenizer {type(tokenizer)}: {e}")
+    
+    # Extract tokens from result
     if hasattr(tokens_raw, 'ids'):
         # Handle tokenizers library Encoding object
         return tokens_raw.ids
@@ -96,18 +93,17 @@ class MorphScore:
         'cym_Latn': 'welsh_data.csv'
     }
 
-    def __init__(self, config_path: Optional[str] = None, data_dir: Optional[str] = None, **kwargs):
+    def __init__(self, config_path: Optional[str] = None, **kwargs):
         """
         Initialize MorphScore evaluator.
         
         Args:
             config_path: Path to JSON config file (optional)
-            data_dir: Path to morphological data directory (optional, overrides default)
             **kwargs: Direct configuration arguments that override defaults/config
         """
         # Set defaults
         self.config = {
-            'data_dir': data_dir or "morphscore_data",
+            'data_dir': "morphscore_data",
 
             # Filtering flags
             'unique_only': True,
@@ -131,6 +127,7 @@ class MorphScore:
             # tokenizer settings
             'subword_prefix': '' # prefix for subwords, e.g. '##' for wordpiece
         }
+
         
         # Load config file if provided
         if config_path:
@@ -138,7 +135,7 @@ class MorphScore:
         
         # Override with any direct arguments
         self.config.update(kwargs)
-        
+
         # Validate configuration
         self._validate_config()
     
