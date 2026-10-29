@@ -30,7 +30,7 @@ def encode_text(tokenizer, text, add_special_tokens=False):
     if hasattr(tokens_raw, 'ids'):
         # Handle tokenizers library Encoding object
         return tokens_raw.ids
-    elif isinstance(tokens_raw, dict) and "input_ids" in tokens_raw:
+    elif (isinstance(tokens_raw, dict) or hasattr(tokens_raw, 'keys')) and "input_ids" in tokens_raw:
         return tokens_raw["input_ids"]
     elif isinstance(tokens_raw, list):
         return tokens_raw
