@@ -3,6 +3,7 @@ import numpy as np
 import json
 import argparse
 from typing import Dict, List, Any, Optional, Union
+from collections.abc import Mapping
 from pathlib import Path
 import os
 import logging
@@ -30,7 +31,7 @@ def encode_text(tokenizer, text, add_special_tokens=False):
     if hasattr(tokens_raw, 'ids'):
         # Handle tokenizers library Encoding object
         return tokens_raw.ids
-    elif isinstance(tokens_raw, dict) and "input_ids" in tokens_raw:
+    elif (isinstance(tokens_raw, dict) or isinstance(tokens_raw, Mapping)) and "input_ids" in tokens_raw:
         return tokens_raw["input_ids"]
     elif isinstance(tokens_raw, list):
         return tokens_raw
